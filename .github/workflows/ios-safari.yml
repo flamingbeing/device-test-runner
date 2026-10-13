@@ -36,7 +36,7 @@ jobs:
 
       - name: Pick and boot an iPhone simulator
         run: |
-          python3 - <<'PY' >> "$GITHUB_ENV"
+          python3 - <<'PY' > sim.env
           import json, os, subprocess
           d = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
           want = os.environ['DEVICE']
@@ -47,6 +47,8 @@ jobs:
           print('SIM_NAME=' + name.replace(' ', '_'))
           print('SIM_RUNTIME=' + rt.split('.')[-1])
           PY
+          cat sim.env >> "$GITHUB_ENV"   # for the later steps
+          set -a; . ./sim.env; set +a    # and for this step
           echo "Simulator: $SIM_NAME ($SIM_RUNTIME)"
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
