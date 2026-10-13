@@ -1,0 +1,79 @@
+name: iOS Safari screenshots
+
+# Boots a real iPhone simulator on a free GitHub macOS runner, opens a web page in the real Mobile Safari app,
+# screenshots each route and uploads the pictures as an artifact. Manual runs only: no secrets, nothing is pushed.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Page to open (https, anawj.com only)"
+        default: "https://apmes.anawj.com/logbook/?demo"
+      device:
+        description: "Simulator name (falls back to the newest iPhone if this one is not installed)"
+        default: "iPhone 16"
+      routes:
+        description: "Comma-separated hash routes to visit and screenshot"
+        default: "#log,#logbook,#notes,#settings,#sendto"
+
+permissions:
+  contents: read
+
+jobs:
+  safari:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      PAGE_URL: ${{ inputs.url }}
+      DEVICE: ${{ inputs.device }}
+      ROUTES: ${{ inputs.routes }}
+    steps:
+      - name: Check the address is allowed
+        run: |
+          case "$PAGE_URL" in
+            https://anawj.com/*|https://*.anawj.com/*) echo "address ok: $PAGE_URL" ;;
+            *) echo "Only https://anawj.com addresses are allowed here"; exit 1 ;;
+          esac
+
+      - name: Pick and boot an iPhone simulator
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, os, subprocess
+          d = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
+          want = os.environ['DEVICE']
+          cands = [(rt, x['name'], x['udid']) for rt, v in d.items() if 'iOS' in rt for x in v]
+          hit = [c for c in cands if c[1] == want] or [c for c in cands if c[1].startswith('iPhone')]
+          rt, name, udid = sorted(hit)[-1]
+          print('UDID=' + udid)
+          print('SIM_NAME=' + name.replace(' ', '_'))
+          print('SIM_RUNTIME=' + rt.split('.')[-1])
+          PY
+          echo "Simulator: $SIM_NAME ($SIM_RUNTIME)"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+
+      - name: Open the page in Mobile Safari and take screenshots
+        run: |
+          mkdir -p shots
+          BASE="${PAGE_URL%%#*}"
+          echo "Simulator: $SIM_NAME $SIM_RUNTIME" | tee shots/info.txt
+          xcrun simctl openurl "$UDID" "$PAGE_URL"
+          sleep 15
+          xcrun simctl io "$UDID" screenshot "shots/00-first-open.png"
+          i=0
+          IFS=',' read -ra R <<< "$ROUTES"
+          for r in "${R[@]}"; do
+            i=$((i+1))
+            xcrun simctl openurl "$UDID" "${BASE}${r}"
+            sleep 8
+            name="$(printf '%02d' "$i")-$(echo "$r" | tr -c 'a-zA-Z0-9\n' '_')"
+            xcrun simctl io "$UDID" screenshot "shots/${name}.png"
+            echo "saved ${name}.png for ${r}" | tee -a shots/info.txt
+          done
+          ls -l shots
+
+      - name: Upload the screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-safari-${{ env.SIM_NAME }}
+          path: shots
+          retention-days: 7
